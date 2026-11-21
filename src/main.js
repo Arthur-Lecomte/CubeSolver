@@ -42,16 +42,35 @@ function setStatut(texte) {
 
 // --- État logique et persistance -------------------------------------------
 
-const etatSauvegarde = localStorage.getItem(CLE_ETAT);
+// localStorage peut lever : SecurityError si le stockage est bloqué
+// (cookies interdits, iframe sandbox), QuotaExceededError s'il est plein.
+// La démo doit fonctionner sans sauvegarde plutôt que mourir.
+function lireStockage(cle) {
+  try {
+    return localStorage.getItem(cle);
+  } catch {
+    return null;
+  }
+}
+
+function ecrireStockage(cle, valeur) {
+  try {
+    localStorage.setItem(cle, valeur);
+  } catch {
+    /* stockage indisponible : on continue sans persistance */
+  }
+}
+
+const etatSauvegarde = lireStockage(CLE_ETAT);
 let etat = isStructurallyValid(etatSauvegarde) ? etatSauvegarde : SOLVED;
 
-let vitesse = Number(localStorage.getItem(CLE_VITESSE));
+let vitesse = Number(lireStockage(CLE_VITESSE));
 if (!Number.isFinite(vitesse) || vitesse < VITESSE_MIN || vitesse > VITESSE_MAX) {
   vitesse = VITESSE_DEFAUT;
 }
 
 function persister() {
-  localStorage.setItem(CLE_ETAT, etat);
+  ecrireStockage(CLE_ETAT, etat);
 }
 
 // Chaque coup committé (drag utilisateur ou file d'animation) est appliqué
@@ -149,7 +168,7 @@ function pomper() {
 
 // --- Vue 3D ------------------------------------------------------------------
 
-const vue = createCubeView(document.getElementById('scene'), {
+const callbacksVue = {
   // Geste de drag utilisateur committé : la géométrie est déjà figée.
   onUserMove(move) {
     coupCommis(move);
@@ -209,7 +228,29 @@ const vue = createCubeView(document.getElementById('scene'), {
     }
     majControles(); // réactive Mélanger/Résoudre une fois la file épuisée
   },
-});
+};
+
+// WebGL peut manquer (accélération coupée, VM, pilote sur liste noire) :
+// plutôt qu'une exception brute et un « Chargement… » éternel, on informe
+// et on neutralise l'interface.
+let vue;
+try {
+  vue = createCubeView(document.getElementById('scene'), callbacksVue);
+} catch (erreur) {
+  setStatut('Affichage 3D indisponible sur cet appareil (WebGL requis).');
+  const controles = [
+    btnMelanger,
+    btnResoudre,
+    btnReinitialiser,
+    btnLecture,
+    btnPrecedent,
+    btnSuivant,
+    curseurVitesse,
+    ...boutonsCoups,
+  ];
+  for (const controle of controles) controle.disabled = true;
+  throw erreur; // stoppe le reste du module ; la page reste informative
+}
 
 vue.setSpeed(vitesse);
 // Restaure la position sauvegardée (géométrie remise à l'identité + stickers).
@@ -380,7 +421,7 @@ document.addEventListener('keydown', (e) => {
 curseurVitesse.value = String(VITESSE_MIN + VITESSE_MAX - vitesse);
 curseurVitesse.addEventListener('input', () => {
   vitesse = VITESSE_MIN + VITESSE_MAX - Number(curseurVitesse.value);
-  localStorage.setItem(CLE_VITESSE, String(vitesse));
+  ecrireStockage(CLE_VITESSE, String(vitesse));
   vue.setSpeed(mode === 'melange' ? Math.min(vitesse, 120) : vitesse);
 });
 
