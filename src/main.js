@@ -40,6 +40,8 @@ function setStatut(texte) {
   statutEl.textContent = texte;
 }
 
+const libelleCoups = (n) => `${n} ${n > 1 ? 'coups' : 'coup'}`;
+
 // --- État logique et persistance -------------------------------------------
 
 // localStorage peut lever : SecurityError si le stockage est bloqué
@@ -94,6 +96,7 @@ let solution = [];
 let curseur = 0; // nombre de coups de la solution actuellement appliqués
 let enVol = 0; // coups de solution enfilés mais pas encore committés
 let session = 0; // invalide les réponses du solveur après Réinitialiser
+let boutonPasActif = null; // dernier bouton ⏮/⏭ activé (restauration du focus)
 
 function estVerrouille() {
   return (
@@ -120,10 +123,20 @@ function majControles() {
     !enSolution || lecture || enVol > 0 || curseur >= solution.length;
 }
 
+// Désactiver ⏮/⏭ pendant l'animation fait tomber le focus clavier sur
+// <body> : on le rend au bouton (ou à son jumeau en bout de course) pour
+// que la navigation pas-à-pas reste utilisable au clavier.
+function restaurerFocusPas() {
+  if (!boutonPasActif || document.activeElement !== document.body) return;
+  const jumeau = boutonPasActif === btnSuivant ? btnPrecedent : btnSuivant;
+  const cible = boutonPasActif.disabled ? jumeau : boutonPasActif;
+  if (!cible.disabled) cible.focus();
+}
+
 // --- Panneau solution --------------------------------------------------------
 
 function afficherSolution() {
-  solutionTitre.textContent = `Solution : ${solution.length} coups`;
+  solutionTitre.textContent = `Solution : ${libelleCoups(solution.length)}`;
   solutionListe.textContent = '';
   for (const move of solution) {
     const puce = document.createElement('li');
@@ -145,7 +158,10 @@ function surligner(index) {
   const puce = puces[index];
   if (puce) {
     puce.classList.add('courant');
-    puce.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // behavior:'smooth' en JS outrepasserait la CSS : on respecte ici même
+    // la préférence « réduire les animations ».
+    const reduit = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    puce.scrollIntoView({ block: 'nearest', behavior: reduit ? 'auto' : 'smooth' });
   }
 }
 
@@ -154,6 +170,7 @@ function quitterSolution() {
   if (mode !== 'solution') return;
   mode = 'libre';
   lecture = false;
+  boutonPasActif = null;
   cacherSolution();
   majControles();
 }
@@ -196,7 +213,7 @@ const callbacksVue = {
           // Ceinture et bretelles : ne crier victoire que si c'est vrai.
           setStatut(
             isSolved(etat)
-              ? `Résolu en ${solution.length} coups ✓`
+              ? `Résolu en ${libelleCoups(solution.length)} ✓`
               : 'Lecture terminée — le cube a bougé entre-temps.',
           );
         } else if (lecture) {
@@ -205,6 +222,7 @@ const callbacksVue = {
           surligner(curseur);
         }
         majControles();
+        restaurerFocusPas();
       } else if (meta === 'solution-retour') {
         curseur--;
         surligner(curseur);
@@ -213,6 +231,7 @@ const callbacksVue = {
         // on relance ici, sinon elle resterait figée à jamais.
         if (lecture) pomper();
         majControles();
+        restaurerFocusPas();
       } else if (meta === 'manuel' || meta === 'melange') {
         // Un coup hors solution rend le panneau obsolète.
         quitterSolution();
@@ -320,7 +339,7 @@ btnResoudre.addEventListener('click', () => {
       afficherSolution();
       surligner(0);
       vue.setSpeed(vitesse);
-      setStatut(`Solution : ${coups.length} coups — lecture…`);
+      setStatut(`Solution : ${libelleCoups(coups.length)} — lecture…`);
       majControles();
       pomper();
     })
@@ -342,6 +361,7 @@ btnReinitialiser.addEventListener('click', () => {
   solution = [];
   curseur = 0;
   enVol = 0;
+  boutonPasActif = null;
   cacherSolution();
   vue.clearQueue(); // termine proprement le coup en cours
   vue.setFacelets(SOLVED);
@@ -373,6 +393,7 @@ btnLecture.addEventListener('click', () => {
 btnSuivant.addEventListener('click', () => {
   if (mode !== 'solution' || lecture || enVol > 0) return;
   if (curseur >= solution.length) return;
+  boutonPasActif = btnSuivant;
   enVol++;
   vue.enqueue([solution[curseur]], 'solution');
   majControles();
@@ -382,6 +403,7 @@ btnSuivant.addEventListener('click', () => {
 btnPrecedent.addEventListener('click', () => {
   if (mode !== 'solution' || lecture || enVol > 0) return;
   if (curseur === 0) return;
+  boutonPasActif = btnPrecedent;
   enVol++;
   vue.enqueue([invertMove(solution[curseur - 1])], 'solution-retour');
   majControles();

@@ -12,8 +12,15 @@
     </header>
 
     <main class="contenu">
-      <!-- La scène three.js est montée ici -->
-      <div id="scene" class="scene" aria-label="Cube 3D interactif"></div>
+      <!-- La scène three.js est montée ici. role="img" : un aria-label est
+           ignoré sur une div générique (naming prohibited). -->
+      <div
+        id="scene"
+        class="scene"
+        role="img"
+        aria-label="Cube de Rubik en 3D. Manipulation à la souris ou au
+          toucher ; utilisez les boutons de coups pour jouer au clavier."
+      ></div>
 
       <section class="panneau" aria-label="Panneau de contrôle">
         <div class="actions">
