@@ -135,16 +135,22 @@ export function createCubeView(container, callbacks = {}) {
       cubie.quaternion.identity();
       cubie.userData.grid = [x, y, z];
     }
+    // Évacue les pivots orphelins (coup ou geste abandonné).
+    for (const enfant of [...groupeCube.children]) {
+      if (!enfant.isMesh) groupeCube.remove(enfant);
+    }
   }
 
   // Recolorie les stickers d'après un état de 54 facettes, géométrie remise
   // à l'identité (aucun déplacement de cubie n'est nécessaire).
   function setFacelets(etat) {
-    // Abandonne sans rappel un éventuel coup en cours : la géométrie va de
-    // toute façon être remise à l'identité.
-    if (coupCourant) {
-      groupeCube.remove(coupCourant.pivot);
-      coupCourant = null;
+    // Abandonne sans rappel un éventuel coup ou geste en cours : la
+    // géométrie va de toute façon être remise à l'identité.
+    coupCourant = null;
+    recalage = null;
+    if (geste) {
+      librePointeur(geste.pointerId);
+      geste = null;
     }
     remiseIdentite();
     for (let i = 0; i < 54; i++) {
@@ -255,6 +261,18 @@ export function createCubeView(container, callbacks = {}) {
   }
 
   function tickAnimation(maintenant) {
+    if (recalage) {
+      const t = Math.min(1, (maintenant - recalage.debut) / recalage.duree);
+      recalage.pivot.quaternion.setFromAxisAngle(
+        recalage.axeVec,
+        recalage.de + (recalage.vers - recalage.de) * easeInOutCubic(t),
+      );
+      if (t >= 1) {
+        const fini = recalage;
+        recalage = null;
+        fini.terminer();
+      }
+    }
     if (coupCourant) {
       const t = Math.min(
         1,
@@ -266,7 +284,13 @@ export function createCubeView(container, callbacks = {}) {
       );
       if (t >= 1) terminerCoup();
     }
-    if (!coupCourant && file.length > 0 && (!enPause || pasDemande)) {
+    if (
+      !coupCourant &&
+      !geste &&
+      !recalage &&
+      file.length > 0 &&
+      (!enPause || pasDemande)
+    ) {
       pasDemande = false;
       demarrerCoup(maintenant);
     }
@@ -302,6 +326,244 @@ export function createCubeView(container, callbacks = {}) {
     if (Number.isFinite(ms)) vitesseMs = Math.min(2000, Math.max(40, ms));
   }
 
+  // --- Rotation des tranches au glisser (Pointer Events) --------------------
+
+  // Normale locale de chaque indice de matériau d'une BoxGeometry.
+  const NORMALES_LOCALES = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, -1, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1),
+  ];
+
+  const SEUIL_DRAG_PX = 8; // seuil écran avant de choisir l'axe tangent
+  const RAD_PAR_UNITE = Math.PI / 2 / 1.5; // ~90° par 1,5 largeur de cubie
+
+  let dragAutorise = true;
+  let geste = null; // phase 'attente' puis 'actif' (voir surPointerDown)
+  let recalage = null; // animation de recalage au multiple de 90°
+  let redispatchEnCours = false; // évènement synthétique pour OrbitControls
+
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const planDrag = new THREE.Plane();
+  const pointPlan = new THREE.Vector3();
+  const vecteurTmp = new THREE.Vector3();
+
+  function librePointeur(pointerId) {
+    try {
+      renderer.domElement.releasePointerCapture(pointerId);
+    } catch {
+      /* capture déjà relâchée */
+    }
+  }
+
+  function rayonDepuisPointeur(e) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    ndc.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    raycaster.setFromCamera(ndc, camera);
+  }
+
+  // Intersection du rayon du pointeur avec le plan de la face saisie.
+  function projeterSurPlan(e) {
+    rayonDepuisPointeur(e);
+    vecteurTmp.set(0, 0, 0).setComponent(geste.axeN, geste.signeN);
+    planDrag.setFromNormalAndCoplanarPoint(vecteurTmp, geste.impact);
+    return raycaster.ray.intersectPlane(planDrag, pointPlan);
+  }
+
+  // Signe de la permutation (i, j, k) de (0, 1, 2) — indices distincts.
+  function signePermutation(i, j) {
+    return (j - i + 3) % 3 === 1 ? 1 : -1;
+  }
+
+  function surPointerDown(e) {
+    if (redispatchEnCours) return; // destiné à OrbitControls
+    if (geste || recalage) {
+      e.stopPropagation(); // pas d'orbite pendant un geste de tranche
+      return;
+    }
+    if (!dragAutorise) return; // l'orbite reste active
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (coupCourant || file.length > 0) return; // animation en cours : orbite
+    rayonDepuisPointeur(e);
+    const impacts = raycaster.intersectObjects(cubies, false);
+    if (impacts.length === 0) return; // fond : orbite
+    const impact = impacts[0];
+    // Face touchée identifiée par l'indice de matériau (fiable même sur
+    // les arrondis), puis normale monde recalée sur l'axe dominant.
+    const normaleMonde = NORMALES_LOCALES[impact.face.materialIndex]
+      .clone()
+      .transformDirection(impact.object.matrixWorld);
+    let axeN = 0;
+    if (Math.abs(normaleMonde.y) > Math.abs(normaleMonde.getComponent(axeN))) axeN = 1;
+    if (Math.abs(normaleMonde.z) > Math.abs(normaleMonde.getComponent(axeN))) axeN = 2;
+    const signeN = normaleMonde.getComponent(axeN) >= 0 ? 1 : -1;
+    const grille = impact.object.userData.grid;
+    if (grille[axeN] !== signeN) return; // face intérieure : orbite
+    // Sticker central : toute rotation serait une tranche du milieu,
+    // on laisse OrbitControls orbiter.
+    const tangents = [0, 1, 2].filter((a) => a !== axeN);
+    if (grille[tangents[0]] === 0 && grille[tangents[1]] === 0) return;
+    // Mode tranche : on confisque le geste (OrbitControls ne verra pas
+    // ce pointerdown grâce à stopPropagation en phase de capture).
+    e.stopPropagation();
+    try {
+      renderer.domElement.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture indisponible */
+    }
+    geste = {
+      phase: 'attente',
+      pointerId: e.pointerId,
+      departX: e.clientX,
+      departY: e.clientY,
+      cubie: impact.object,
+      axeN,
+      signeN,
+      impact: impact.point.clone(),
+    };
+  }
+
+  // Tranche du milieu : on abandonne et on rend le geste à OrbitControls
+  // en lui rejouant un pointerdown synthétique.
+  function abandonnerPourOrbite(e) {
+    librePointeur(geste.pointerId);
+    geste = null;
+    redispatchEnCours = true;
+    try {
+      renderer.domElement.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          pointerId: e.pointerId,
+          pointerType: e.pointerType,
+          isPrimary: true,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          button: 0,
+          buttons: 1,
+          bubbles: true,
+        }),
+      );
+    } finally {
+      redispatchEnCours = false;
+    }
+  }
+
+  function surPointerMove(e) {
+    if (!geste || e.pointerId !== geste.pointerId) return;
+    if (geste.phase === 'attente') {
+      const dx = e.clientX - geste.departX;
+      const dy = e.clientY - geste.departY;
+      if (Math.hypot(dx, dy) < SEUIL_DRAG_PX) return;
+      if (!projeterSurPlan(e)) return;
+      // Axe tangent t : celui des deux axes ⊥ n le plus aligné avec le
+      // drag monde ; l'axe de rotation est le troisième axe.
+      vecteurTmp.copy(pointPlan).sub(geste.impact);
+      const [c1, c2] = [0, 1, 2].filter((a) => a !== geste.axeN);
+      const tIdx =
+        Math.abs(vecteurTmp.getComponent(c1)) >=
+        Math.abs(vecteurTmp.getComponent(c2))
+          ? c1
+          : c2;
+      const axeRot = tIdx === c1 ? c2 : c1;
+      const coord = geste.cubie.userData.grid[axeRot];
+      if (coord === 0) {
+        abandonnerPourOrbite(e);
+        return;
+      }
+      // sigma = (axe de rotation × normale sortante) · t : signe reliant
+      // la distance de drag le long de t à l'angle autour de +axeRot.
+      geste.phase = 'actif';
+      geste.tIdx = tIdx;
+      geste.axeRot = axeRot;
+      geste.coord = coord;
+      geste.axeVec = AXES_MONDE[axeRot];
+      geste.sigma = signePermutation(axeRot, geste.axeN) * geste.signeN;
+      geste.angle = 0;
+      geste.pivot = creerPivot(cubiesDeCouche(axeRot, coord));
+    }
+    if (geste.phase === 'actif') {
+      if (!projeterSurPlan(e)) return;
+      const s =
+        pointPlan.getComponent(geste.tIdx) -
+        geste.impact.getComponent(geste.tIdx);
+      geste.angle = Math.max(
+        -Math.PI,
+        Math.min(Math.PI, s * geste.sigma * RAD_PAR_UNITE),
+      );
+      geste.pivot.quaternion.setFromAxisAngle(geste.axeVec, geste.angle);
+    }
+  }
+
+  // Recale la tranche au multiple de 90° le plus proche (borné à ±180°),
+  // fige, puis émet le jeton correspondant via onUserMove.
+  function lancerRecalage(g, duree) {
+    const quarts = Math.max(-2, Math.min(2, Math.round(g.angle / (Math.PI / 2))));
+    const cible = (quarts * Math.PI) / 2;
+    const terminer = () => {
+      g.pivot.quaternion.setFromAxisAngle(g.axeVec, cible);
+      figerPivot(g.pivot);
+      // Angle horaire autour de la NORMALE SORTANTE (axeRot · coord) :
+      // jeton nu = 1 quart horaire, cohérent avec applyMove.
+      const quartsHoraire = (((-quarts * g.coord) % 4) + 4) % 4;
+      if (quartsHoraire !== 0) {
+        vecteurTmp.set(0, 0, 0).setComponent(g.axeRot, g.coord);
+        const face = FACE_PAR_NORMALE.get(
+          `${vecteurTmp.x},${vecteurTmp.y},${vecteurTmp.z}`,
+        );
+        const jeton =
+          quartsHoraire === 1 ? face : quartsHoraire === 2 ? face + '2' : face + "'";
+        callbacks.onUserMove?.(jeton);
+      }
+    };
+    if (duree <= 0) {
+      terminer();
+    } else {
+      recalage = {
+        pivot: g.pivot,
+        axeVec: g.axeVec,
+        de: g.angle,
+        vers: cible,
+        debut: performance.now(),
+        duree,
+        terminer,
+      };
+    }
+  }
+
+  function surPointerUp(e) {
+    if (!geste || e.pointerId !== geste.pointerId) return;
+    const g = geste;
+    geste = null;
+    librePointeur(e.pointerId);
+    if (g.phase === 'actif') lancerRecalage(g, 80);
+    // phase 'attente' : simple clic sur un sticker, rien à faire.
+  }
+
+  // Coupe le mode tranche (l'orbite reste active). Un geste en cours est
+  // terminé immédiatement (recalage instantané + jeton émis le cas échéant).
+  function setDragEnabled(actif) {
+    dragAutorise = Boolean(actif);
+    if (!dragAutorise && geste) {
+      const g = geste;
+      geste = null;
+      librePointeur(g.pointerId);
+      if (g.phase === 'actif') lancerRecalage(g, 0);
+    }
+  }
+
+  // pointerdown en phase de capture sur le conteneur : si on entre en mode
+  // tranche, stopPropagation empêche OrbitControls de démarrer une orbite.
+  container.addEventListener('pointerdown', surPointerDown, true);
+  renderer.domElement.addEventListener('pointermove', surPointerMove);
+  renderer.domElement.addEventListener('pointerup', surPointerUp);
+  renderer.domElement.addEventListener('pointercancel', surPointerUp);
+
   // --- Redimensionnement ---------------------------------------------------
 
   function redimensionner() {
@@ -331,6 +593,10 @@ export function createCubeView(container, callbacks = {}) {
   function dispose() {
     cancelAnimationFrame(rafId);
     observateur.disconnect();
+    container.removeEventListener('pointerdown', surPointerDown, true);
+    renderer.domElement.removeEventListener('pointermove', surPointerMove);
+    renderer.domElement.removeEventListener('pointerup', surPointerUp);
+    renderer.domElement.removeEventListener('pointercancel', surPointerUp);
     controls.dispose();
     geometrieCubie.dispose();
     materiauPlastique.dispose();
@@ -346,6 +612,7 @@ export function createCubeView(container, callbacks = {}) {
     clearQueue,
     setSpeed,
     setFacelets,
+    setDragEnabled,
     dispose,
   };
   return vue;
