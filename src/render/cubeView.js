@@ -4,7 +4,7 @@
 // createCubeView(container, callbacks) -> vue
 //   callbacks : { onUserMove, onMoveStart, onMoveCommitted, onQueueEmpty }
 //   vue : enqueue, setPaused, stepOnce, clearQueue, setSpeed,
-//         setFacelets, setDragEnabled, dispose
+//         setFacelets, setDragEnabled, estOccupee, dispose
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -545,16 +545,35 @@ export function createCubeView(container, callbacks = {}) {
     // phase 'attente' : simple clic sur un sticker, rien à faire.
   }
 
-  // Coupe le mode tranche (l'orbite reste active). Un geste en cours est
-  // terminé immédiatement (recalage instantané + jeton émis le cas échéant).
+  // Coupe le mode tranche (l'orbite reste active). Un geste OU un recalage
+  // en cours est terminé immédiatement (figeage + jeton émis le cas
+  // échéant) : au retour de l'appel, plus aucun coup utilisateur n'est en
+  // vol et onUserMove a déjà été notifié.
   function setDragEnabled(actif) {
     dragAutorise = Boolean(actif);
-    if (!dragAutorise && geste) {
+    if (dragAutorise) return;
+    if (geste) {
       const g = geste;
       geste = null;
       librePointeur(g.pointerId);
       if (g.phase === 'actif') lancerRecalage(g, 0);
     }
+    if (recalage) {
+      const r = recalage;
+      recalage = null;
+      r.terminer();
+    }
+  }
+
+  // Un coup (file ou en cours), un geste de tranche ou un recalage est-il
+  // actif ? Tant que oui, l'état logique du consommateur peut encore bouger.
+  function estOccupee() {
+    return (
+      Boolean(coupCourant) ||
+      file.length > 0 ||
+      Boolean(geste) ||
+      Boolean(recalage)
+    );
   }
 
   // pointerdown en phase de capture sur le conteneur : si on entre en mode
@@ -571,10 +590,16 @@ export function createCubeView(container, callbacks = {}) {
     const hauteur = Math.max(1, container.clientHeight);
     camera.aspect = largeur / hauteur;
     camera.updateProjectionMatrix();
+    // Le devicePixelRatio change avec le zoom du navigateur ou un
+    // déplacement vers un autre écran : le réévaluer évite un rendu flou.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(largeur, hauteur, false);
   }
   const observateur = new ResizeObserver(redimensionner);
   observateur.observe(container);
+  // Le zoom (et souvent le changement d'écran) déclenche resize sans
+  // forcément changer la taille CSS du conteneur.
+  window.addEventListener('resize', redimensionner);
   redimensionner();
 
   // --- Boucle de rendu -----------------------------------------------------
@@ -593,6 +618,7 @@ export function createCubeView(container, callbacks = {}) {
   function dispose() {
     cancelAnimationFrame(rafId);
     observateur.disconnect();
+    window.removeEventListener('resize', redimensionner);
     container.removeEventListener('pointerdown', surPointerDown, true);
     renderer.domElement.removeEventListener('pointermove', surPointerMove);
     renderer.domElement.removeEventListener('pointerup', surPointerUp);
@@ -613,6 +639,7 @@ export function createCubeView(container, callbacks = {}) {
     setSpeed,
     setFacelets,
     setDragEnabled,
+    estOccupee,
     dispose,
   };
   return vue;

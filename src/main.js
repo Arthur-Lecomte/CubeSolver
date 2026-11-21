@@ -40,18 +40,39 @@ function setStatut(texte) {
   statutEl.textContent = texte;
 }
 
+const libelleCoups = (n) => `${n} ${n > 1 ? 'coups' : 'coup'}`;
+
 // --- État logique et persistance -------------------------------------------
 
-const etatSauvegarde = localStorage.getItem(CLE_ETAT);
+// localStorage peut lever : SecurityError si le stockage est bloqué
+// (cookies interdits, iframe sandbox), QuotaExceededError s'il est plein.
+// La démo doit fonctionner sans sauvegarde plutôt que mourir.
+function lireStockage(cle) {
+  try {
+    return localStorage.getItem(cle);
+  } catch {
+    return null;
+  }
+}
+
+function ecrireStockage(cle, valeur) {
+  try {
+    localStorage.setItem(cle, valeur);
+  } catch {
+    /* stockage indisponible : on continue sans persistance */
+  }
+}
+
+const etatSauvegarde = lireStockage(CLE_ETAT);
 let etat = isStructurallyValid(etatSauvegarde) ? etatSauvegarde : SOLVED;
 
-let vitesse = Number(localStorage.getItem(CLE_VITESSE));
+let vitesse = Number(lireStockage(CLE_VITESSE));
 if (!Number.isFinite(vitesse) || vitesse < VITESSE_MIN || vitesse > VITESSE_MAX) {
   vitesse = VITESSE_DEFAUT;
 }
 
 function persister() {
-  localStorage.setItem(CLE_ETAT, etat);
+  ecrireStockage(CLE_ETAT, etat);
 }
 
 // Chaque coup committé (drag utilisateur ou file d'animation) est appliqué
@@ -75,6 +96,7 @@ let solution = [];
 let curseur = 0; // nombre de coups de la solution actuellement appliqués
 let enVol = 0; // coups de solution enfilés mais pas encore committés
 let session = 0; // invalide les réponses du solveur après Réinitialiser
+let boutonPasActif = null; // dernier bouton ⏮/⏭ activé (restauration du focus)
 
 function estVerrouille() {
   return (
@@ -86,8 +108,11 @@ function estVerrouille() {
 
 function majControles() {
   const verrou = estVerrouille();
-  btnMelanger.disabled = verrou;
-  btnResoudre.disabled = verrou || !solveurPret || mode === 'solution';
+  // Tant qu'un coup est en vol (file, animation, drag ou recalage), l'état
+  // logique peut encore bouger : Mélanger et Résoudre attendent.
+  const occupe = vue.estOccupee();
+  btnMelanger.disabled = verrou || occupe;
+  btnResoudre.disabled = verrou || occupe || !solveurPret || mode === 'solution';
   for (const bouton of boutonsCoups) bouton.disabled = verrou;
   vue.setDragEnabled(!verrou);
 
@@ -98,10 +123,20 @@ function majControles() {
     !enSolution || lecture || enVol > 0 || curseur >= solution.length;
 }
 
+// Désactiver ⏮/⏭ pendant l'animation fait tomber le focus clavier sur
+// <body> : on le rend au bouton (ou à son jumeau en bout de course) pour
+// que la navigation pas-à-pas reste utilisable au clavier.
+function restaurerFocusPas() {
+  if (!boutonPasActif || document.activeElement !== document.body) return;
+  const jumeau = boutonPasActif === btnSuivant ? btnPrecedent : btnSuivant;
+  const cible = boutonPasActif.disabled ? jumeau : boutonPasActif;
+  if (!cible.disabled) cible.focus();
+}
+
 // --- Panneau solution --------------------------------------------------------
 
 function afficherSolution() {
-  solutionTitre.textContent = `Solution : ${solution.length} coups`;
+  solutionTitre.textContent = `Solution : ${libelleCoups(solution.length)}`;
   solutionListe.textContent = '';
   for (const move of solution) {
     const puce = document.createElement('li');
@@ -123,7 +158,10 @@ function surligner(index) {
   const puce = puces[index];
   if (puce) {
     puce.classList.add('courant');
-    puce.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // behavior:'smooth' en JS outrepasserait la CSS : on respecte ici même
+    // la préférence « réduire les animations ».
+    const reduit = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    puce.scrollIntoView({ block: 'nearest', behavior: reduit ? 'auto' : 'smooth' });
   }
 }
 
@@ -132,6 +170,7 @@ function quitterSolution() {
   if (mode !== 'solution') return;
   mode = 'libre';
   lecture = false;
+  boutonPasActif = null;
   cacherSolution();
   majControles();
 }
@@ -146,11 +185,12 @@ function pomper() {
 
 // --- Vue 3D ------------------------------------------------------------------
 
-const vue = createCubeView(document.getElementById('scene'), {
+const callbacksVue = {
   // Geste de drag utilisateur committé : la géométrie est déjà figée.
   onUserMove(move) {
     coupCommis(move);
     quitterSolution();
+    majControles();
   },
 
   onMoveStart(move, meta) {
@@ -170,17 +210,28 @@ const vue = createCubeView(document.getElementById('scene'), {
           lecture = false;
           lectureTerminee = true;
           surligner(solution.length - 1);
-          setStatut(`Résolu en ${solution.length} coups ✓`);
+          // Ceinture et bretelles : ne crier victoire que si c'est vrai.
+          setStatut(
+            isSolved(etat)
+              ? `Résolu en ${libelleCoups(solution.length)} ✓`
+              : 'Lecture terminée — le cube a bougé entre-temps.',
+          );
         } else if (lecture) {
           pomper();
         } else {
           surligner(curseur);
         }
         majControles();
+        restaurerFocusPas();
       } else if (meta === 'solution-retour') {
         curseur--;
         surligner(curseur);
+        // Si ⏯ a été pressé pendant que ce coup retour était en vol, la
+        // lecture est active mais rien n'a pu être pompé (enVol > 0) :
+        // on relance ici, sinon elle resterait figée à jamais.
+        if (lecture) pomper();
         majControles();
+        restaurerFocusPas();
       } else if (meta === 'manuel' || meta === 'melange') {
         // Un coup hors solution rend le panneau obsolète.
         quitterSolution();
@@ -193,10 +244,32 @@ const vue = createCubeView(document.getElementById('scene'), {
       mode = 'libre';
       vue.setSpeed(vitesse);
       setStatut('Cube mélangé — à vous de jouer !');
-      majControles();
     }
+    majControles(); // réactive Mélanger/Résoudre une fois la file épuisée
   },
-});
+};
+
+// WebGL peut manquer (accélération coupée, VM, pilote sur liste noire) :
+// plutôt qu'une exception brute et un « Chargement… » éternel, on informe
+// et on neutralise l'interface.
+let vue;
+try {
+  vue = createCubeView(document.getElementById('scene'), callbacksVue);
+} catch (erreur) {
+  setStatut('Affichage 3D indisponible sur cet appareil (WebGL requis).');
+  const controles = [
+    btnMelanger,
+    btnResoudre,
+    btnReinitialiser,
+    btnLecture,
+    btnPrecedent,
+    btnSuivant,
+    curseurVitesse,
+    ...boutonsCoups,
+  ];
+  for (const controle of controles) controle.disabled = true;
+  throw erreur; // stoppe le reste du module ; la page reste informative
+}
 
 vue.setSpeed(vitesse);
 // Restaure la position sauvegardée (géométrie remise à l'identité + stickers).
@@ -231,19 +304,27 @@ btnMelanger.addEventListener('click', () => {
 
 btnResoudre.addEventListener('click', () => {
   if (estVerrouille() || !solveurPret || mode === 'solution') return;
+  if (vue.estOccupee()) return; // un coup est encore en vol (garde anti-course)
   if (isSolved(etat)) {
     setStatut('Déjà résolu !');
     return;
   }
   rechercheEnCours = true;
-  majControles();
+  majControles(); // coupe le drag : un recalage en vol se committe ici même
   setStatut('Recherche de la solution…');
   const maSession = session;
+  const etatEnvoye = etat; // photographie APRÈS la purge du drag
   solveur
-    .solve(etat)
+    .solve(etatEnvoye)
     .then((coups) => {
       if (maSession !== session) return; // réinitialisé entre-temps
       rechercheEnCours = false;
+      if (etat !== etatEnvoye) {
+        // Un coup s'est committé pendant la recherche : solution périmée.
+        setStatut('Le cube a bougé pendant la recherche — réessayez.');
+        majControles();
+        return;
+      }
       if (coups.length === 0) {
         setStatut('Déjà résolu !');
         majControles();
@@ -258,7 +339,7 @@ btnResoudre.addEventListener('click', () => {
       afficherSolution();
       surligner(0);
       vue.setSpeed(vitesse);
-      setStatut(`Solution : ${coups.length} coups — lecture…`);
+      setStatut(`Solution : ${libelleCoups(coups.length)} — lecture…`);
       majControles();
       pomper();
     })
@@ -280,6 +361,7 @@ btnReinitialiser.addEventListener('click', () => {
   solution = [];
   curseur = 0;
   enVol = 0;
+  boutonPasActif = null;
   cacherSolution();
   vue.clearQueue(); // termine proprement le coup en cours
   vue.setFacelets(SOLVED);
@@ -299,6 +381,9 @@ btnLecture.addEventListener('click', () => {
     setStatut('Lecture en pause — naviguez coup par coup.');
   } else if (curseur < solution.length) {
     lecture = true;
+    // Une relecture (après ⏮ en fin de lecture) redevient une lecture
+    // active à part entière : les entrées doivent se reverrouiller.
+    lectureTerminee = false;
     setStatut('Lecture de la solution…');
     pomper();
   }
@@ -308,6 +393,7 @@ btnLecture.addEventListener('click', () => {
 btnSuivant.addEventListener('click', () => {
   if (mode !== 'solution' || lecture || enVol > 0) return;
   if (curseur >= solution.length) return;
+  boutonPasActif = btnSuivant;
   enVol++;
   vue.enqueue([solution[curseur]], 'solution');
   majControles();
@@ -317,6 +403,7 @@ btnSuivant.addEventListener('click', () => {
 btnPrecedent.addEventListener('click', () => {
   if (mode !== 'solution' || lecture || enVol > 0) return;
   if (curseur === 0) return;
+  boutonPasActif = btnPrecedent;
   enVol++;
   vue.enqueue([invertMove(solution[curseur - 1])], 'solution-retour');
   majControles();
@@ -328,6 +415,7 @@ for (const bouton of boutonsCoups) {
   bouton.addEventListener('click', () => {
     if (estVerrouille()) return;
     vue.enqueue([bouton.dataset.move], 'manuel');
+    majControles(); // gèle Mélanger/Résoudre le temps de l'animation
   });
 }
 
@@ -345,6 +433,7 @@ document.addEventListener('keydown', (e) => {
   if (!face) return;
   if (estVerrouille()) return;
   vue.enqueue([face + (e.shiftKey ? "'" : '')], 'manuel');
+  majControles(); // gèle Mélanger/Résoudre le temps de l'animation
   e.preventDefault();
 });
 
@@ -354,7 +443,7 @@ document.addEventListener('keydown', (e) => {
 curseurVitesse.value = String(VITESSE_MIN + VITESSE_MAX - vitesse);
 curseurVitesse.addEventListener('input', () => {
   vitesse = VITESSE_MIN + VITESSE_MAX - Number(curseurVitesse.value);
-  localStorage.setItem(CLE_VITESSE, String(vitesse));
+  ecrireStockage(CLE_VITESSE, String(vitesse));
   vue.setSpeed(mode === 'melange' ? Math.min(vitesse, 120) : vitesse);
 });
 
