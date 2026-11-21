@@ -10,16 +10,23 @@
   --texte: #e8eaee;
   --texte-sourd: #9aa1ac;
   --accent: #4f8cff;
+  --accent-doux: rgba(79, 140, 255, 0.35);
 }
 
 * {
   box-sizing: border-box;
 }
 
+::selection {
+  background: var(--accent-doux);
+}
+
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
-  background: var(--fond);
+  background:
+    radial-gradient(60rem 30rem at 20% -10%, rgba(79, 140, 255, 0.07), transparent),
+    var(--fond);
   color: var(--texte);
   min-height: 100vh;
   display: grid;
@@ -29,18 +36,24 @@ body {
 /* --- En-tête ------------------------------------------------------------- */
 
 .entete {
-  padding: 0.9rem 1.25rem 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 1rem;
+  padding: 0.9rem 1.25rem 0.6rem;
 }
 
 .entete h1 {
   margin: 0;
   font-size: 1.35rem;
+  letter-spacing: 0.01em;
 }
 
 .statut {
-  margin: 0.3rem 0 0;
+  margin: 0;
   min-height: 1.3em;
   color: var(--texte-sourd);
+  font-size: 0.95rem;
 }
 
 /* --- Disposition principale ---------------------------------------------- */
@@ -59,6 +72,9 @@ body {
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid var(--bordure);
+  box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.35);
+  /* Un drag de tranche ne doit jamais faire défiler la page (tactile). */
+  touch-action: none;
 }
 
 .panneau {
@@ -102,10 +118,25 @@ button {
   min-height: 44px; /* cible tactile */
   padding: 0.4rem 0.8rem;
   cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 80ms ease;
 }
 
 button:hover:not(:disabled) {
   background: var(--fond-bouton-survol);
+  border-color: #3a4150;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:focus-visible,
+input[type='range']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 button:disabled {
@@ -117,6 +148,18 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 0.5rem;
+}
+
+/* Résoudre : l'action vedette de la démo. */
+#btn-resoudre:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b0d12;
+  font-weight: 700;
+}
+
+#btn-resoudre:hover:not(:disabled) {
+  background: #6ba0ff;
 }
 
 /* --- Vitesse ---------------------------------------------------------------- */
@@ -150,8 +193,17 @@ button:disabled {
   gap: 0.5rem;
 }
 
+/* Très petits écrans : garde des cibles tactiles confortables. */
+@media (max-width: 420px) {
+  .grille-coups {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
 .grille-coups button {
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 0.4rem 0.2rem;
 }
 
 /* --- Panneau solution --------------------------------------------------------- */
@@ -175,6 +227,9 @@ button:disabled {
   gap: 0.35rem;
   max-height: 9rem;
   overflow-y: auto;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bordure) transparent;
 }
 
 .solution-liste li {
@@ -183,6 +238,9 @@ button:disabled {
   border-radius: 6px;
   padding: 0.2rem 0.5rem;
   font-variant-numeric: tabular-nums;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .solution-liste li.courant {
@@ -190,6 +248,7 @@ button:disabled {
   border-color: var(--accent);
   color: #0b0d12;
   font-weight: 700;
+  box-shadow: 0 0 0 3px var(--accent-doux);
 }
 
 .solution-controles {
@@ -213,4 +272,22 @@ footer {
 
 footer a {
   color: var(--texte-sourd);
+  text-decoration-color: var(--bordure);
+  transition: color 120ms ease;
+}
+
+footer a:hover {
+  color: var(--texte);
+}
+
+/* Respecte la préférence de réduction des animations (interface : les
+   transitions CSS ; la 3D reste pilotée par le curseur de vitesse). */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+
+  .solution-liste {
+    scroll-behavior: auto;
+  }
 }
