@@ -140,10 +140,166 @@ export function createCubeView(container, callbacks = {}) {
   // Recolorie les stickers d'après un état de 54 facettes, géométrie remise
   // à l'identité (aucun déplacement de cubie n'est nécessaire).
   function setFacelets(etat) {
+    // Abandonne sans rappel un éventuel coup en cours : la géométrie va de
+    // toute façon être remise à l'identité.
+    if (coupCourant) {
+      groupeCube.remove(coupCourant.pivot);
+      coupCourant = null;
+    }
     remiseIdentite();
     for (let i = 0; i < 54; i++) {
       materiauxStickers[i].color.set(COULEURS[etat[i]] ?? COULEUR_PLASTIQUE);
     }
+  }
+
+  // --- Moteur d'animation : file de coups ----------------------------------
+
+  const AXES_MONDE = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, 0, 1),
+  ];
+
+  let vitesseMs = 220; // durée d'un quart de tour
+  let enPause = false;
+  let pasDemande = false; // stepOnce : jouer exactement le prochain coup
+  const file = []; // { move, meta, index }
+  let coupCourant = null; // { move, meta, index, pivot, axe, angleCible, … }
+
+  function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  // Décompose un jeton ('R', "U'", 'F2'…) : axe monde (0=x, 1=y, 2=z),
+  // couche (coordonnée ±1 sur cet axe) et angle signé autour de +axe.
+  // Jeton nu = -90° autour de la normale SORTANTE (horaire vu de
+  // l'extérieur de la face), cohérent avec applyMove de facelets.js.
+  function decomposerJeton(move) {
+    const normale = NORMALE_FACE[move[0]];
+    if (!normale) throw new Error(`Mouvement inconnu : ${move}`);
+    const axe = normale.findIndex((c) => c !== 0);
+    const couche = normale[axe];
+    const suffixe = move.slice(1);
+    const angleSortant =
+      suffixe === "'" ? Math.PI / 2 : suffixe === '2' ? -Math.PI : -Math.PI / 2;
+    return {
+      axe,
+      couche,
+      angle: angleSortant * couche, // reporté sur l'axe monde positif
+      demiTour: suffixe === '2',
+    };
+  }
+
+  function cubiesDeCouche(axe, couche) {
+    return cubies.filter((c) => c.userData.grid[axe] === couche);
+  }
+
+  function creerPivot(listeCubies) {
+    const pivot = new THREE.Group();
+    groupeCube.add(pivot);
+    for (const cubie of listeCubies) pivot.attach(cubie);
+    return pivot;
+  }
+
+  // Figeage : réintègre les cubies dans le groupe racine, positions
+  // arrondies à la grille entière, orientation recalée sur l'alignement
+  // d'axes le plus proche — aucune dérive de flottants entre deux coups.
+  const matriceTmp = new THREE.Matrix4();
+  function figerCubie(cubie) {
+    cubie.position.set(
+      Math.round(cubie.position.x),
+      Math.round(cubie.position.y),
+      Math.round(cubie.position.z),
+    );
+    matriceTmp.makeRotationFromQuaternion(cubie.quaternion);
+    const e = matriceTmp.elements;
+    for (let i = 0; i < 16; i++) e[i] = Math.round(e[i]);
+    cubie.quaternion.setFromRotationMatrix(matriceTmp);
+    cubie.userData.grid = [cubie.position.x, cubie.position.y, cubie.position.z];
+  }
+
+  function figerPivot(pivot) {
+    for (const cubie of [...pivot.children]) {
+      groupeCube.attach(cubie);
+      figerCubie(cubie);
+    }
+    groupeCube.remove(pivot);
+  }
+
+  function demarrerCoup(maintenant) {
+    const { move, meta, index } = file.shift();
+    const { axe, couche, angle, demiTour } = decomposerJeton(move);
+    const pivot = creerPivot(cubiesDeCouche(axe, couche));
+    coupCourant = {
+      move,
+      meta,
+      index,
+      pivot,
+      axe: AXES_MONDE[axe],
+      angleCible: angle,
+      debut: maintenant,
+      duree: Math.max(1, vitesseMs * (demiTour ? 1.6 : 1)),
+    };
+    callbacks.onMoveStart?.(move, meta, index);
+  }
+
+  function terminerCoup() {
+    const { pivot, axe, angleCible, move, meta, index } = coupCourant;
+    pivot.quaternion.setFromAxisAngle(axe, angleCible);
+    figerPivot(pivot);
+    coupCourant = null;
+    callbacks.onMoveCommitted?.(move, meta, index);
+    // onMoveCommitted a pu ré-alimenter la file : ne signale le vide
+    // qu'une fois la file réellement épuisée.
+    if (!coupCourant && file.length === 0) callbacks.onQueueEmpty?.();
+  }
+
+  function tickAnimation(maintenant) {
+    if (coupCourant) {
+      const t = Math.min(
+        1,
+        (maintenant - coupCourant.debut) / coupCourant.duree,
+      );
+      coupCourant.pivot.quaternion.setFromAxisAngle(
+        coupCourant.axe,
+        coupCourant.angleCible * easeInOutCubic(t),
+      );
+      if (t >= 1) terminerCoup();
+    }
+    if (!coupCourant && file.length > 0 && (!enPause || pasDemande)) {
+      pasDemande = false;
+      demarrerCoup(maintenant);
+    }
+  }
+
+  // Ajoute un lot de coups ; `meta` et l'index du coup dans son lot sont
+  // rendus tels quels à onMoveStart / onMoveCommitted.
+  function enqueue(moves, meta) {
+    moves.forEach((move, index) => file.push({ move, meta, index }));
+  }
+
+  function setPaused(pause) {
+    enPause = Boolean(pause);
+    if (!enPause) pasDemande = false;
+  }
+
+  // Joue exactement un coup quand la file est en pause.
+  function stepOnce() {
+    if (enPause && !coupCourant && file.length > 0) pasDemande = true;
+  }
+
+  // Vide la file en terminant proprement le coup en cours.
+  function clearQueue() {
+    const avaitTravail = Boolean(coupCourant) || file.length > 0;
+    file.length = 0;
+    pasDemande = false;
+    if (coupCourant) terminerCoup();
+    else if (avaitTravail) callbacks.onQueueEmpty?.();
+  }
+
+  function setSpeed(msParQuartDeTour) {
+    const ms = Number(msParQuartDeTour);
+    if (Number.isFinite(ms)) vitesseMs = Math.min(2000, Math.max(40, ms));
   }
 
   // --- Redimensionnement ---------------------------------------------------
@@ -162,12 +318,13 @@ export function createCubeView(container, callbacks = {}) {
   // --- Boucle de rendu -----------------------------------------------------
 
   let rafId = 0;
-  function boucle() {
+  function boucle(temps) {
     rafId = requestAnimationFrame(boucle);
+    tickAnimation(temps ?? performance.now());
     controls.update();
     renderer.render(scene, camera);
   }
-  boucle();
+  boucle(performance.now());
 
   // --- API publique --------------------------------------------------------
 
@@ -183,6 +340,11 @@ export function createCubeView(container, callbacks = {}) {
   }
 
   const vue = {
+    enqueue,
+    setPaused,
+    stepOnce,
+    clearQueue,
+    setSpeed,
     setFacelets,
     dispose,
   };
