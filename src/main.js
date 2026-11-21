@@ -86,8 +86,11 @@ function estVerrouille() {
 
 function majControles() {
   const verrou = estVerrouille();
-  btnMelanger.disabled = verrou;
-  btnResoudre.disabled = verrou || !solveurPret || mode === 'solution';
+  // Tant qu'un coup est en vol (file, animation, drag ou recalage), l'état
+  // logique peut encore bouger : Mélanger et Résoudre attendent.
+  const occupe = vue.estOccupee();
+  btnMelanger.disabled = verrou || occupe;
+  btnResoudre.disabled = verrou || occupe || !solveurPret || mode === 'solution';
   for (const bouton of boutonsCoups) bouton.disabled = verrou;
   vue.setDragEnabled(!verrou);
 
@@ -151,6 +154,7 @@ const vue = createCubeView(document.getElementById('scene'), {
   onUserMove(move) {
     coupCommis(move);
     quitterSolution();
+    majControles();
   },
 
   onMoveStart(move, meta) {
@@ -170,7 +174,12 @@ const vue = createCubeView(document.getElementById('scene'), {
           lecture = false;
           lectureTerminee = true;
           surligner(solution.length - 1);
-          setStatut(`Résolu en ${solution.length} coups ✓`);
+          // Ceinture et bretelles : ne crier victoire que si c'est vrai.
+          setStatut(
+            isSolved(etat)
+              ? `Résolu en ${solution.length} coups ✓`
+              : 'Lecture terminée — le cube a bougé entre-temps.',
+          );
         } else if (lecture) {
           pomper();
         } else {
@@ -193,8 +202,8 @@ const vue = createCubeView(document.getElementById('scene'), {
       mode = 'libre';
       vue.setSpeed(vitesse);
       setStatut('Cube mélangé — à vous de jouer !');
-      majControles();
     }
+    majControles(); // réactive Mélanger/Résoudre une fois la file épuisée
   },
 });
 
@@ -231,19 +240,27 @@ btnMelanger.addEventListener('click', () => {
 
 btnResoudre.addEventListener('click', () => {
   if (estVerrouille() || !solveurPret || mode === 'solution') return;
+  if (vue.estOccupee()) return; // un coup est encore en vol (garde anti-course)
   if (isSolved(etat)) {
     setStatut('Déjà résolu !');
     return;
   }
   rechercheEnCours = true;
-  majControles();
+  majControles(); // coupe le drag : un recalage en vol se committe ici même
   setStatut('Recherche de la solution…');
   const maSession = session;
+  const etatEnvoye = etat; // photographie APRÈS la purge du drag
   solveur
-    .solve(etat)
+    .solve(etatEnvoye)
     .then((coups) => {
       if (maSession !== session) return; // réinitialisé entre-temps
       rechercheEnCours = false;
+      if (etat !== etatEnvoye) {
+        // Un coup s'est committé pendant la recherche : solution périmée.
+        setStatut('Le cube a bougé pendant la recherche — réessayez.');
+        majControles();
+        return;
+      }
       if (coups.length === 0) {
         setStatut('Déjà résolu !');
         majControles();
@@ -328,6 +345,7 @@ for (const bouton of boutonsCoups) {
   bouton.addEventListener('click', () => {
     if (estVerrouille()) return;
     vue.enqueue([bouton.dataset.move], 'manuel');
+    majControles(); // gèle Mélanger/Résoudre le temps de l'animation
   });
 }
 
@@ -345,6 +363,7 @@ document.addEventListener('keydown', (e) => {
   if (!face) return;
   if (estVerrouille()) return;
   vue.enqueue([face + (e.shiftKey ? "'" : '')], 'manuel');
+  majControles(); // gèle Mélanger/Résoudre le temps de l'animation
   e.preventDefault();
 });
 
