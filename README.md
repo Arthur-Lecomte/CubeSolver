@@ -1,9 +1,32 @@
-# Modèle de démo pour arthurlecomte.fr
+# Rubik's Cube 3D — démo pour arthurlecomte.fr
 
-Squelette Vite minimal, prêt à devenir une démo hébergée sur
+Un Rubik's Cube 3×3 interactif en 3D : on orbite autour du cube, on
+tourne les tranches à la souris ou au doigt, on le mélange, et on le
+laisse se résoudre tout seul — chaque coup est animé, du mélange à la
+solution.
+
+Démo destinée à être hébergée sur
 [arthurlecomte.fr](https://arthurlecomte.fr) sous `/demos/<slug>/`.
-Les règles du portfolio sont déjà câblées : chemins relatifs, lien de
-retour, clés `localStorage` préfixées, aucune dépendance externe.
+
+## Fonctionnalités
+
+- **Cube 3D** rendu avec three.js (embarqué au build, aucune requête
+  externe) : orbite libre, éclairage doux, rendu net jusqu'à 2× DPR.
+- **Rotation des tranches au glisser** : on attrape une facette et la
+  tranche suit le doigt, puis se recale au quart de tour le plus
+  proche. Glisser le fond (ou une tranche du milieu) fait orbiter la
+  caméra.
+- **Boutons de notation** (U, U', D, … B') et clavier
+  (`u d l r f b`, Maj = sens inverse).
+- **Mélange aléatoire animé** (25 coups, sans redondances).
+- **Résolution automatique** par l'algorithme two-phase de Kociemba,
+  implémenté from scratch (modèle cubie, coordonnées, tables de
+  pruning, IDA*) dans un Web Worker : solutions d'environ 20 coups en
+  quelques dizaines de millisecondes.
+- **Lecture pas-à-pas de la solution** : notation affichée, coup
+  courant surligné, lecture/pause et navigation coup par coup.
+- **Vitesse d'animation réglable** et **état persisté** dans
+  `localStorage` (clés préfixées `cube-solver:`).
 
 ## Développer
 
@@ -11,23 +34,34 @@ retour, clés `localStorage` préfixées, aucune dépendance externe.
 npm ci
 npm run dev       # serveur de développement
 npm run build     # fichiers finaux dans dist/
+npm run verify    # harnais de vérification du solveur (Node)
 ```
 
-## Les règles à ne pas casser (vérifiées au build du portfolio)
+`npm run verify` reconstruit les tables et résout 200 mélanges
+aléatoires en contrôlant chaque solution (longueur, retour à l'état
+résolu, rejet des états insolubles).
 
-- **Aucune requête vers un autre domaine** : pas de CDN, de police
-  distante, d'API, de stats. Tout est embarqué dans le projet.
-- Pas de cookies, pas de service worker, pas de formulaire qui envoie
-  des données.
-- `localStorage` uniquement pour une sauvegarde ou des préférences,
-  clés préfixées par le slug (voir `src/main.js`).
-- Chemins relatifs (`base: './'` dans `vite.config.js` — ne pas retirer).
-- Garder le lien « Retour à la fiche du projet » (le slug est ajusté à
-  l'intégration).
-- Assets (images, sons, polices) : uniquement du libre de droits ou du
-  fait maison, licences notées dans le README du projet.
-- Besoin d'un serveur, d'une API ou d'un compte ? Alors pas de démo
-  hébergée : la fiche du portfolio renverra vers ce repo.
+## Architecture
+
+```
+src/
+  cube/facelets.js    état logique : 54 facettes (convention Kociemba),
+                      permutations des 18 coups générées depuis la géométrie
+  solver/             two-phase : cubie.js, coords.js, prune.js, search.js,
+                      twophase.js + worker.js / client.js (Web Worker)
+  render/cubeView.js  scène three.js : cubies, file d'animation, drag
+  main.js             état, interface, lecture de la solution, persistance
+scripts/verify-solver.mjs   harnais exécuté par `npm run verify`
+```
+
+## Règles du portfolio (respectées, vérifiées au build)
+
+- Aucune requête vers un autre domaine : three.js est bundlé, polices
+  système, aucun asset distant. Aucun asset externe utilisé (tout est
+  généré par le code).
+- Pas de cookies, pas de service worker, pas de formulaire.
+- `localStorage` préfixé `cube-solver:`, chemins relatifs
+  (`base: './'`), lien « Retour à la fiche du projet » conservé.
 
 ## Intégrer au portfolio
 
