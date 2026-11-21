@@ -590,10 +590,16 @@ export function createCubeView(container, callbacks = {}) {
     const hauteur = Math.max(1, container.clientHeight);
     camera.aspect = largeur / hauteur;
     camera.updateProjectionMatrix();
+    // Le devicePixelRatio change avec le zoom du navigateur ou un
+    // déplacement vers un autre écran : le réévaluer évite un rendu flou.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(largeur, hauteur, false);
   }
   const observateur = new ResizeObserver(redimensionner);
   observateur.observe(container);
+  // Le zoom (et souvent le changement d'écran) déclenche resize sans
+  // forcément changer la taille CSS du conteneur.
+  window.addEventListener('resize', redimensionner);
   redimensionner();
 
   // --- Boucle de rendu -----------------------------------------------------
@@ -612,6 +618,7 @@ export function createCubeView(container, callbacks = {}) {
   function dispose() {
     cancelAnimationFrame(rafId);
     observateur.disconnect();
+    window.removeEventListener('resize', redimensionner);
     container.removeEventListener('pointerdown', surPointerDown, true);
     renderer.domElement.removeEventListener('pointermove', surPointerMove);
     renderer.domElement.removeEventListener('pointerup', surPointerUp);
