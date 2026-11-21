@@ -65,7 +65,7 @@ console.log('=== Vérification du solveur two-phase ===');
 const rng = mulberry32(20261121);
 
 // ---------------------------------------------------------------- Test 1 --
-console.log('\n[1/4] Cohérence du modèle cubie');
+console.log('\n[1/5] Cohérence du modèle cubie');
 {
   let ok = true;
   let detail = '';
@@ -98,7 +98,7 @@ console.log('\n[1/4] Cohérence du modèle cubie');
 }
 
 // ---------------------------------------------------------------- Test 2 --
-console.log('\n[2/4] 200 mélanges aléatoires (budget 250 ms)');
+console.log('\n[2/5] 200 mélanges aléatoires (budget 250 ms)');
 {
   const t0 = performance.now();
   initTables();
@@ -130,7 +130,7 @@ console.log('\n[2/4] 200 mélanges aléatoires (budget 250 ms)');
 }
 
 // ---------------------------------------------------------------- Test 3 --
-console.log('\n[3/4] 20 mélanges au budget par défaut (1200 ms)');
+console.log('\n[3/5] 20 mélanges au budget par défaut (1200 ms)');
 {
   const longueurs = [];
   const temps = [];
@@ -155,7 +155,7 @@ console.log('\n[3/4] 20 mélanges au budget par défaut (1200 ms)');
 }
 
 // ---------------------------------------------------------------- Test 4 --
-console.log('\n[4/4] Cas limites et états invalides');
+console.log('\n[4/5] Cas limites et états invalides');
 {
   const solRes = solve(SOLVED);
   check(Array.isArray(solRes) && solRes.length === 0, 'solve(SOLVED) renvoie []');
@@ -172,6 +172,32 @@ console.log('\n[4/4] Cas limites et états invalides');
   coinsEchanges.cp[0] = 1;
   coinsEchanges.cp[1] = 0;
   expectError(() => solve(cubieToFacelets(coinsEchanges)), 'deux coins échangés rejetés (parité)');
+}
+
+// ---------------------------------------------------------------- Test 5 --
+console.log('\n[5/5] Solutions triviales (états à 1 ou 2 coups)');
+{
+  const unR = solve(applyMove(SOLVED, 'R'));
+  check(
+    unR.length === 1 && unR[0] === "R'",
+    `un quart de tour R se défait en 1 coup (obtenu : ${unR.join(' ')})`,
+  );
+
+  let okUn = true;
+  for (const mv of MOVES) {
+    const etat = applyMove(SOLVED, mv);
+    const sol = solve(etat);
+    if (sol.length !== 1 || applyMoves(etat, sol) !== SOLVED) okUn = false;
+  }
+  check(okUn, 'les 18 états à un coup se résolvent en exactement 1 coup');
+
+  let okDeux = true;
+  for (let i = 0; i < 30; i++) {
+    const etat = applyMoves(SOLVED, randomScramble(2, rng));
+    const sol = solve(etat);
+    if (sol.length > 2 || applyMoves(etat, sol) !== SOLVED) okDeux = false;
+  }
+  check(okDeux, 'les états à deux coups se résolvent en au plus 2 coups');
 }
 
 // ----------------------------------------------------------------- Bilan --
