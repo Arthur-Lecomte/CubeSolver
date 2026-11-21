@@ -189,6 +189,10 @@ const vue = createCubeView(document.getElementById('scene'), {
       } else if (meta === 'solution-retour') {
         curseur--;
         surligner(curseur);
+        // Si ⏯ a été pressé pendant que ce coup retour était en vol, la
+        // lecture est active mais rien n'a pu être pompé (enVol > 0) :
+        // on relance ici, sinon elle resterait figée à jamais.
+        if (lecture) pomper();
         majControles();
       } else if (meta === 'manuel' || meta === 'melange') {
         // Un coup hors solution rend le panneau obsolète.
@@ -316,6 +320,9 @@ btnLecture.addEventListener('click', () => {
     setStatut('Lecture en pause — naviguez coup par coup.');
   } else if (curseur < solution.length) {
     lecture = true;
+    // Une relecture (après ⏮ en fin de lecture) redevient une lecture
+    // active à part entière : les entrées doivent se reverrouiller.
+    lectureTerminee = false;
     setStatut('Lecture de la solution…');
     pomper();
   }
