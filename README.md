@@ -49,7 +49,10 @@ src/
                       permutations des 18 coups générées depuis la géométrie
   solver/             two-phase : cubie.js, coords.js, prune.js, search.js,
                       twophase.js + worker.js / client.js (Web Worker)
-  render/cubeView.js  scène three.js : cubies, file d'animation, drag
+  render/cubeView.js  scène three.js : cubies, file d'animation, drag ;
+                      rendu à la demande (la scène n'est redessinée que si
+                      elle a changé ou si la caméra bouge — une démo au
+                      repos ne doit pas faire saccader une vidéo à côté)
   main.js             état, interface, lecture de la solution, persistance
 scripts/verify-solver.mjs   harnais exécuté par `npm run verify`
 ```
